@@ -91,7 +91,7 @@ def _kmeans_1d_weighted(levels: np.ndarray, weights: np.ndarray, cluster_count: 
 def _cluster_vehicle(img: np.ndarray | None, cluster_count: int,  out_repo: ImageFileRepository) -> Tuple[str, list[int]]:
     """
     Fast clustering using weighted 1D kmeans on the 256 gray levels (no sklearn).
-    Returns (`../output/clustered_preview.png`, centroid_gray_list).
+    Returns (`../output/clustered_preview.webp`, centroid_gray_list).
     """
     if img is None:
         raise ValueError("cluster_vehicle received None for `img`")
@@ -124,7 +124,7 @@ def _cluster_vehicle(img: np.ndarray | None, cluster_count: int,  out_repo: Imag
     out[gray < 50] = (0, 0, 0)
     out[gray > 245] = (255, 255, 255)
 
-    return  out_repo.store_image(out, "clustered_preview.png"), centroids.tolist()
+    return  out_repo.store_image(out, "clustered_preview.webp"), centroids.tolist()
 
 # -------------------------------------------------------------
 # FUNCTION: Apply final color mapping

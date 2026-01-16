@@ -21,9 +21,11 @@ def render_page_to_cv2(pdf_bytes, page_number, dpi=250):
 
     pix = page.get_pixmap(dpi=dpi)
 
+    # Use a supported format for PyMuPDF, then convert to WEBP with OpenCV
     img_bytes = pix.tobytes("png")
     arr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    # Return the decoded image (cv2 Mat), not the encoded WEBP buffer
     return img
 
 
@@ -49,7 +51,7 @@ def process_pdf_in_parallel(pdf_bytes, out_repo: ImageFileRepository, page_filte
     rendered = 0
     start_time = time.perf_counter()
     # Use the global executor
-    with concurrent.futures.ProcessPoolExecutor(max_workers=32) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
         for page_number, img in executor.map(process_page_worker, page_args):
             if img is not None:
                 results[page_number] = img

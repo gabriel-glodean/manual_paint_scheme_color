@@ -13,10 +13,9 @@ def vehicle_to_images(page_bytes, out_repo: ImageFileRepository,  page: int) -> 
 
     print("Found", len(vehicles), "vehicle-like regions inside the box.")
 
-    out_repo.sub_repo("roi").store_image(roi,f"roi_pg{page}.png")
+    out_repo.sub_repo("roi").store_image(roi,f"roi_pg{page}.webp")
     vehicles_repo = out_repo.sub_repo("vehicles")
-    for i, v in enumerate(vehicles, start=1):
-        vehicles_repo.store_image(v,f"vehicles_pg{page}_{i:03d}.png")
+    vehicles_repo.store_images(vehicles,f"vehicles_pg{page}")
     return roi
 
 
