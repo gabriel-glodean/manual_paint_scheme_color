@@ -1,7 +1,6 @@
 from typing import Tuple, List
 import cv2
 import numpy as np
-import time
 import uuid
 
 from collections_extended import RangeMap
@@ -10,7 +9,7 @@ from cv2.typing import MatLike
 
 from .file_repo import ImageFileRepository
 from .parsers import parse_color_ranges, lookup_with_default
-from .pdf_processing import process_pdf_in_parallel
+from .pdf_processing import process_pdf_pages
 from .page_filter import PageFilter
 
 
@@ -21,22 +20,11 @@ from .page_filter import PageFilter
 
 Color = Tuple[int, int, int]
 
-def process_pdf(pdf_file, k, dpi, out_repo: ImageFileRepository, page_filter: PageFilter) -> Tuple[str | None, List[int], str]:
+def process_pdf(pdf_file, dpi, out_repo: ImageFileRepository, page_filter: PageFilter) -> Tuple[str | None, str]:
     uuid_string = str(uuid.uuid4())
-    preview_path, centroids =  _extract_first_vehicle(pdf_file, k, dpi, page_filter, out_repo.sub_repo(uuid_string))
-    return preview_path, sorted(centroids), uuid_string
+    items = process_pdf_pages(pdf_file, out_repo.sub_repo(uuid_string), page_filter, dpi)
+    return next((item for item in items if item is not None), None), uuid_string
 
-def _extract_first_vehicle(pdf_bytes, cluster_count: int, dpi: int, page_filter: PageFilter, out_repo: ImageFileRepository):
-    items =  process_pdf_in_parallel(pdf_bytes, out_repo, page_filter, dpi)
-    first = next((item for item in items if item is not None), None)
-    start_time = time.perf_counter()
-    if first is None:
-        print("Could not find any painting page.")
-        return None, []
-    ret = _cluster_vehicle(first, cluster_count, out_repo)
-    elapsed = time.perf_counter() - start_time
-    print(f"Clustering time: {elapsed:.6f} seconds")
-    return ret
 
 # -------------------------------------------------------------
 # FUNCTION: Cluster pixels and return centroid image + cluster data
@@ -87,6 +75,14 @@ def _kmeans_1d_weighted(levels: np.ndarray, weights: np.ndarray, cluster_count: 
         if shift <= tol:
             break
     return centroids
+
+def cluster_vehicle(img: str, cluster_count: int, in_repo:ImageFileRepository, out_repo: ImageFileRepository) -> Tuple[str, list[int]]:
+    """
+    Load image from in_repo by `img` path, cluster it, and store preview in out_repo.
+    Returns (`../output/clustered_preview.webp`, centroid_gray_list).
+    """
+    return _cluster_vehicle(in_repo.get_image(img), cluster_count, out_repo)
+
 
 def _cluster_vehicle(img: np.ndarray | None, cluster_count: int,  out_repo: ImageFileRepository) -> Tuple[str, list[int]]:
     """

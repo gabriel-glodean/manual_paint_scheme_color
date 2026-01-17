@@ -9,10 +9,12 @@ RUN yum install -y mesa-libGL
 # Copy files directly to /var/task (the Lambda default code root)
 COPY backend/app/ .
 COPY logic ./logic
+COPY aws ./aws
 
 RUN pip install --upgrade pip setuptools wheel --no-cache-dir && \
     pip install --only-binary=:all: --no-cache-dir -r requirements.txt && \
     pip install --only-binary=:all: --no-cache-dir -r logic/requirements.txt && \
+    pip install --only-binary=:all: --no-cache-dir -r aws/requirements.txt && \
     rm -rf /root/.cache/pip && \
     find . -type d -name '__pycache__' -exec rm -rf {} +
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import boto3
 
 from logic import process_pdf, apply_color_mapping, ImageFileRepository
+from logic.color_vehicle import cluster_vehicle
 from logic.parsers import parse_page_list
 
 def stream_files_as_zip(file_paths: list[str]):
@@ -72,7 +73,7 @@ def stream_files_as_zip(file_paths: list[str]):
     )
 
 def get_image_file_repo() -> ImageFileRepository:
-    deployment = os.getenv("deployment", "local")
+    deployment = os.getenv("deployment", "local").lower()
     print(f"[DEBUG] get_image_file_repo: deployment={deployment}")
     if deployment == "local":
         from logic.file_repo import LocalImageFileRepo
@@ -80,7 +81,7 @@ def get_image_file_repo() -> ImageFileRepository:
         print(f"[DEBUG] Using LocalImageFileRepo with path={path}")
         return LocalImageFileRepo(Path(path))
     elif deployment == "aws":
-        from s3_file_repo import S3ImageFileRepo
+        from aws.s3_file_repo import S3ImageFileRepo
         bucket = os.getenv("s3_output_bucket", None)
         if bucket:
             print(f"[DEBUG] Using S3ImageFileRepo with bucket={bucket}")
@@ -105,7 +106,6 @@ router = APIRouter(prefix="/api/v1/color_vehicles", tags=["color_vehicles"])
 
 class ProcessPdfRequest(BaseModel):
     s3_pdf_path: str
-    clusters: int
     dpi: int
     pages: str = ""
     threshold: int = 3
@@ -140,16 +140,36 @@ async def api_process_pdf(
             raise HTTPException(status_code=500, detail=f"S3 download error: {s3_exc}")
         print(f"[DEBUG] Downloaded PDF size: {len(contents)} bytes")
         page_filter = create_page_filter(request.pages, request.threshold)
-        print(f"[DEBUG] Calling process_pdf with clusters={request.clusters}, dpi={request.dpi}")
-        preview_path, centroids, uuid_string = process_pdf(contents, request.clusters, request.dpi, image_repo, page_filter)
-        print(f"[DEBUG] process_pdf returned preview_path={preview_path}, centroids={centroids}, session={uuid_string}")
+        print(f"[DEBUG] Calling process_pdf with dpi={request.dpi}")
+        roi_path, uuid_string = process_pdf(contents, request.dpi, image_repo, page_filter)
+        print(f"[DEBUG] process_pdf returned roi_path={roi_path}, session={uuid_string}")
         return {
-            "images": [preview_path],
-            "centroids": centroids,
+            "images": [roi_path],
             "session": uuid_string
         }
     except Exception as exc:
         print(f"[ERROR] Exception in /process_pdf: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+class PreviewImageRequest(BaseModel):
+    image: str
+    clusters: int
+    session: str
+
+@router.post("/preview_image")
+def preview_image(request: PreviewImageRequest = Body(...), image_repo = Depends(get_image_file_repo)):
+    print(f"[DEBUG] /preview_image called with image_path={request.image}")
+    try:
+        preview_path, centroids = cluster_vehicle(request.image, request.clusters,
+                              image_repo, image_repo.sub_repo(request.session))
+        print(f"[DEBUG] cluster_vehicle returned: preview_path={preview_path}, centroids={centroids}")
+        return {
+            "images": [preview_path],
+            "centroids": centroids,
+        }
+    except Exception as exc:
+        print(f"[ERROR] Exception in /preview_image: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(exc))
 

@@ -7,16 +7,16 @@ from .file_repo import ImageFileRepository
 
 
 @log_exec_time
-def vehicle_to_images(page_bytes, out_repo: ImageFileRepository,  page: int) -> np.ndarray:
+def vehicle_to_images(page_bytes, out_repo: ImageFileRepository,  page: int) -> str:
     roi, roi_box = find_inner_roi(page_bytes, margin=10)
     vehicles = extract_vehicles_inside_roi(roi, min_area_ratio=0.01)
 
     print("Found", len(vehicles), "vehicle-like regions inside the box.")
 
-    out_repo.sub_repo("roi").store_image(roi,f"roi_pg{page}.webp")
+    ret = out_repo.sub_repo("roi").store_image(roi,f"roi_pg{page}.webp")
     vehicles_repo = out_repo.sub_repo("vehicles")
     vehicles_repo.store_images(vehicles,f"vehicles_pg{page}")
-    return roi
+    return ret
 
 
 def find_inner_roi(img, margin: int = 10) -> Tuple[np.ndarray, Tuple[int,int,int,int]]:

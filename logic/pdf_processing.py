@@ -1,5 +1,4 @@
 import fitz
-import concurrent.futures
 import numpy as np
 import cv2
 import time
@@ -38,7 +37,7 @@ def process_page_worker(args):
     return p, None
 
 
-def process_pdf_in_parallel(pdf_bytes, out_repo: ImageFileRepository, page_filter: PageFilter, dpi=250):
+def process_pdf_pages(pdf_bytes, out_repo: ImageFileRepository, page_filter: PageFilter, dpi=250):
     start_time = time.perf_counter()
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     n = doc.page_count
@@ -50,12 +49,12 @@ def process_pdf_in_parallel(pdf_bytes, out_repo: ImageFileRepository, page_filte
 
     rendered = 0
     start_time = time.perf_counter()
-    # Use the global executor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as executor:
-        for page_number, img in executor.map(process_page_worker, page_args):
-            if img is not None:
-                results[page_number] = img
-                rendered += 1
+    # Sequential processing for AWS Lambda compatibility
+    for args in page_args:
+        page_number, img = process_page_worker(args)
+        if img is not None:
+            results[page_number] = img
+            rendered += 1
     elapsed = time.perf_counter() - start_time
     print(f"[timing] Rendered {rendered} pages in {elapsed:.6f} seconds...")
     return results

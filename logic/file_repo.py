@@ -11,7 +11,8 @@ else:
 class ImageFileRepository(Protocol):
     def iter_images(self) -> Iterator[Tuple[str, MatLike]]:
         ...
-
+    def get_image(self, name: str) -> MatLike:
+        ...
     def store_image(self, img: MatLike, name: str) -> str:
         ...
 
@@ -118,3 +119,25 @@ class LocalImageFileRepo:
             path = self.store_image(img, img_name)
             paths.append(path)
         return paths
+
+    def get_image(self, name: str) -> MatLike:
+        """
+        Retrieve an image by filename from the local directory.
+        Raises FileNotFoundError if the image does not exist or cannot be read.
+        """
+        try:
+            import cv2
+        except Exception as exc:
+            raise RuntimeError("LocalImageFileRepo requires opencv-python (cv2)") from exc
+
+        # Only allow filename, no path traversal
+        if Path(name).name != name:
+            raise ValueError("name must be a filename without path components")
+
+        img_path = self._dir / name
+        if not img_path.exists():
+            raise FileNotFoundError(f"Image not found: {img_path}")
+        mat = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
+        if mat is None:
+            raise RuntimeError(f"cv2.imread failed to read image: {img_path}")
+        return mat
