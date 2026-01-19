@@ -8,64 +8,23 @@ from fastapi import Depends, HTTPException, APIRouter, FastAPI, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import boto3
 
-from logic import process_pdf, apply_color_mapping, ImageFileRepository
+from logic import process_pdf, apply_color_mapping, ImageFileRepository, PdfRetriever
 from logic.color_vehicle import cluster_vehicle
 from logic.parsers import parse_page_list
 
-def stream_files_as_zip(file_paths: list[str]):
-    print(f"[DEBUG] stream_files_as_zip called with file_paths={file_paths}")
-    deployment = os.getenv("deployment", "local")
-    s3 = None
-    if deployment == "aws":
-        import boto3
-        s3 = boto3.client("s3")
-        print("[DEBUG] S3 client created for AWS deployment")
-    else:
-        print("[DEBUG] Not in AWS deployment, S3 client not created")
+
+def stream_files_as_zip(image_repo, file_paths: list[str]):
     zip_io = io.BytesIO()
-    # Use ZIP_DEFLATED for compression
     with zipfile.ZipFile(zip_io, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for file_path in file_paths:
             arc_name = os.path.basename(file_path)
-            print(f"[DEBUG] Processing file_path={file_path}, arc_name={arc_name}")
-            if file_path.startswith("s3://"):
-                if not s3:
-                    print(f"[ERROR] S3 URI provided but not in AWS deployment: {file_path}")
-                    raise HTTPException(status_code=400, detail="S3 URIs are only supported in AWS deployment.")
-                try:
-                    _, _, bucket_and_key = file_path.partition("s3://")
-                    bucket, key = bucket_and_key.split("/", 1)
-                except Exception as exc:
-                    print(f"[ERROR] Invalid S3 URI: {file_path}, error: {exc}")
-                    raise HTTPException(status_code=400, detail=f"Invalid S3 URI: {file_path}")
-                print(f"[DEBUG] Attempting to fetch from S3: bucket={bucket}, key={key}")
-                try:
-                    obj = s3.get_object(Bucket=bucket, Key=key)
-                    data = obj["Body"].read()
-                    print(f"[DEBUG] S3 fetch success: {key}, size={len(data)} bytes")
-                    zf.writestr(arc_name, data)
-                    print(f"[DEBUG] Added {arc_name} to zip from S3")
-                except Exception as exc:
-                    print(f"[ERROR] Failed to fetch or add {file_path} from S3: {exc}")
-                    raise HTTPException(status_code=500, detail=f"Failed to fetch or add {file_path} from S3: {exc}")
-            else:
-                if deployment == "aws":
-                    print(f"[ERROR] Only S3 URIs are supported in Lambda: {file_path}")
-                    raise HTTPException(status_code=400, detail=f"Only S3 URIs are supported in Lambda: {file_path}")
-                print(f"[DEBUG] Attempting to open local file: {file_path}")
-                try:
-                    with open(file_path, "rb") as f:
-                        data = f.read()
-                        print(f"[DEBUG] Local file read success: {file_path}, size={len(data)} bytes")
-                        zf.writestr(arc_name, data)
-                        print(f"[DEBUG] Added {arc_name} to zip from local file")
-                except Exception as exc:
-                    print(f"[ERROR] Failed to open or add {file_path} from local: {exc}")
-                    raise HTTPException(status_code=500, detail=f"Failed to open or add {file_path} from local: {exc}")
+            try:
+                data = image_repo.get_image_bytes(file_path)
+                zf.writestr(arc_name, data)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch or add {file_path}: {exc}")
     zip_io.seek(0)
-    print(f"[DEBUG] Zip file created, size={zip_io.getbuffer().nbytes} bytes (compressed)")
     return StreamingResponse(
         zip_io,
         media_type="application/x-zip-compressed",
@@ -86,7 +45,22 @@ def get_image_file_repo() -> ImageFileRepository:
         if bucket:
             print(f"[DEBUG] Using S3ImageFileRepo with bucket={bucket}")
             return S3ImageFileRepo(bucket)
+    print(f"[DEBUG] Unsupported deployment type: {deployment}")
+    raise ValueError(f"Unsupported deployment type: {deployment}")
 
+def pdf_retriever() -> PdfRetriever:
+    deployment = os.getenv("deployment", "local").lower()
+    print(f"[DEBUG] get_image_file_repo: deployment={deployment}")
+    if deployment == "local":
+        from logic.file_repo import LocalPdfRetriever
+        print(f"[DEBUG] UsingLocalPdfRetriever")
+        return LocalPdfRetriever(".")
+    elif deployment == "aws":
+        from aws.s3_file_repo import S3PdfRetriever
+        bucket = os.getenv("s3_output_bucket", None)
+        if bucket:
+            print(f"[DEBUG] Using S3ImageFileRepo with bucket={bucket}")
+            return S3PdfRetriever(bucket)
     print(f"[DEBUG] Unsupported deployment type: {deployment}")
     raise ValueError(f"Unsupported deployment type: {deployment}")
 
@@ -105,7 +79,7 @@ def create_page_filter(pages: str = "", threshold: int = 3):
 router = APIRouter(prefix="/api/v1/color_vehicles", tags=["color_vehicles"])
 
 class ProcessPdfRequest(BaseModel):
-    s3_pdf_path: str
+    pdf_path: str
     dpi: int
     pages: str = ""
     threshold: int = 3
@@ -115,30 +89,14 @@ class ProcessPdfRequest(BaseModel):
 @router.post("/process_pdf")
 async def api_process_pdf(
     request: ProcessPdfRequest = Body(...),
-    image_repo = Depends(get_image_file_repo)
+    image_repo = Depends(get_image_file_repo),
+    pdf_repo = Depends(pdf_retriever)
 ):
     try:
         print(f"[DEBUG] /process_pdf called with: {request}")
-        # Parse S3 path
-        s3_path = request.s3_pdf_path
-        if not s3_path.startswith("s3://"):
-            print(f"[DEBUG] Invalid s3_pdf_path: {s3_path}")
-            raise HTTPException(status_code=400, detail="s3_pdf_path must start with 's3://'")
-        s3_parts = s3_path[5:].split('/', 1)
-        if len(s3_parts) != 2:
-            print(f"[DEBUG] Invalid s3_pdf_path format: {s3_path}")
-            raise HTTPException(status_code=400, detail="Invalid s3_pdf_path format")
-        bucket, key = s3_parts
-        print(f"[DEBUG] Downloading PDF from S3 bucket={bucket}, key={key}")
-        s3 = boto3.client("s3")
-        try:
-            pdf_obj = s3.get_object(Bucket=bucket, Key=key)
-            contents = pdf_obj["Body"].read()
-        except Exception as s3_exc:
-            print(f"[ERROR] Exception while downloading PDF from S3: {s3_exc}")
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"S3 download error: {s3_exc}")
-        print(f"[DEBUG] Downloaded PDF size: {len(contents)} bytes")
+        print(f"[DEBUG] Attempting to load PDF from: {request.pdf_path}")
+        contents = pdf_repo.get_pdf_bytes(request.pdf_path)
+        print(f"[DEBUG] PDF loaded, size={len(contents)} bytes")
         page_filter = create_page_filter(request.pages, request.threshold)
         print(f"[DEBUG] Calling process_pdf with dpi={request.dpi}")
         roi_path, uuid_string = process_pdf(contents, request.dpi, image_repo, page_filter)
@@ -162,7 +120,8 @@ def preview_image(request: PreviewImageRequest = Body(...), image_repo = Depends
     print(f"[DEBUG] /preview_image called with image_path={request.image}")
     try:
         preview_path, centroids = cluster_vehicle(request.image, request.clusters,
-                              image_repo, image_repo.sub_repo(request.session))
+                              image_repo.sub_repo(request.session).sub_repo("roi")
+                                                  , image_repo.sub_repo(request.session))
         print(f"[DEBUG] cluster_vehicle returned: preview_path={preview_path}, centroids={centroids}")
         return {
             "images": [preview_path],
@@ -175,12 +134,19 @@ def preview_image(request: PreviewImageRequest = Body(...), image_repo = Depends
 
 class DownloadImagesRequest(BaseModel):
     images: list[str]
+    session: str
+    folder: str = ""
 
 @router.post("/download_images")
-def download_images(request: DownloadImagesRequest = Body(...)):
+def download_images(request: DownloadImagesRequest = Body(...), image_repo = Depends(get_image_file_repo)):
     print(f"[DEBUG] /download_images called with: {request}")
     try:
-        response = stream_files_as_zip(request.images)
+        repo = image_repo.sub_repo(request.session)
+        if request.folder:
+            repo = repo.sub_repo(request.folder)
+            print(f"[DEBUG] Using sub-repo for folder: {request.folder}")
+
+        response = stream_files_as_zip(repo, request.images)
         print(f"[DEBUG] stream_files_as_zip returned StreamingResponse")
         return response
     except Exception as exc:

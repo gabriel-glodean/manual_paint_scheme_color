@@ -26,5 +26,6 @@ RUN find ${LAMBDA_TASK_ROOT} -type d -exec chmod 755 {} \;
 
 ENV deployment=aws
 ENV s3_output_bucket=colorize-output-bucket
+ENV s3_input_bucket=colorize-input-bucket
 
 CMD ["lambda_handler.handler"]

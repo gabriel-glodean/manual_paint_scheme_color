@@ -22,6 +22,10 @@ class ImageFileRepository(Protocol):
     def sub_repo(self, name: str) -> "ImageFileRepository":
        ...
 
+    def get_image_bytes(self, name: str) -> bytes:
+        ...
+
+
 # Example concrete implementation (optional; requires opencv-python and numpy)
 class LocalImageFileRepo:
     """Yield (filename, cv2 Mat) tuples for all WEBP files in a given local directory.
@@ -89,7 +93,7 @@ class LocalImageFileRepo:
         print( f"Writing image to {str(out_path.resolve())}, success: {ok}")
         if not ok:
             raise RuntimeError(f"Failed to write path {out_path}")
-        return str_path
+        return name
 
 
     def sub_repo(self, name: str) -> "LocalImageFileRepo":
@@ -141,3 +145,50 @@ class LocalImageFileRepo:
         if mat is None:
             raise RuntimeError(f"cv2.imread failed to read image: {img_path}")
         return mat
+
+    def get_image_bytes(self, name: str) -> bytes:
+        """
+        Return the raw bytes of the image file, for use in zipping or direct download.
+        """
+        img_path = Path(name)
+        if not img_path.is_absolute():
+            img_path = (self._dir / img_path).resolve()
+        else:
+            img_path = img_path.resolve()
+        if not str(img_path).startswith(str(self._dir.resolve())):
+            raise ValueError(f"Attempted access outside repo directory: {img_path}")
+        if not img_path.exists():
+            raise FileNotFoundError(f"Image not found: {img_path}")
+        with open(img_path, "rb") as f:
+            return f.read()
+
+class PdfRetriever(Protocol):
+    def get_pdf_bytes(self, name: str) -> bytes:
+        ...
+
+class LocalPdfRetriever:
+    """
+    Retrieve PDF bytes from a local directory or absolute path.
+    Usage:
+        retriever = LocalPdfRetriever("C:/path/to/dir")
+        pdf_bytes = retriever.get_pdf_bytes("manual.pdf")
+        pdf_bytes = retriever.get_pdf_bytes("C:/other/path/file.pdf")
+    """
+    def __init__(self, directory):
+        self._dir = Path(directory)
+        if not self._dir.exists():
+            self._dir.mkdir(parents=True, exist_ok=True)
+        if not self._dir.is_dir():
+            raise ValueError(f"Path is not a directory: {self._dir}")
+
+    def get_pdf_bytes(self, name: str) -> bytes:
+        pdf_path = Path(name)
+        if not pdf_path.is_absolute():
+            # Only allow filename, no path traversal
+            if pdf_path.name != name:
+                raise ValueError("name must be a filename without path components if not absolute")
+            pdf_path = self._dir / name
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        with open(pdf_path, "rb") as f:
+            return f.read()

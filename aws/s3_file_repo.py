@@ -6,8 +6,15 @@ from pathlib import Path
 
 from logic import log_exec_time
 
+s3_client = boto3.client("s3")
 
 class S3ImageFileRepo:
+    """
+    S3ImageFileRepo can accept a pre-created boto3 S3 client for Lambda warm-up optimization.
+    Example usage at module level:
+        s3_client = boto3.client("s3")
+        repo = S3ImageFileRepo(bucket="my-bucket", s3_client=s3_client)
+    """
     def __getstate__(self):
         state = self.__dict__.copy()
         state.pop("s3", None)
@@ -15,14 +22,14 @@ class S3ImageFileRepo:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.s3 = boto3.client("s3")
+        self.s3 = state.get("s3") or s3_client
 
-    def __init__(self, bucket: Optional[str] = None, prefix: str = ""):
-        self.bucket = bucket or os.getenv("S3_BUCKET")
+    def __init__(self, bucket: str, prefix: str = "", s3_client_param=s3_client):
+        self.bucket = bucket
         if not self.bucket:
             raise ValueError("S3 bucket name must be provided via argument or S3_BUCKET env var.")
         self.prefix = prefix.strip("/")
-        self.s3 = boto3.client("s3")
+        self.s3 = s3_client_param
 
     def _full_key(self, key: str) -> str:
         if self.prefix:
@@ -76,7 +83,7 @@ class S3ImageFileRepo:
 
     def sub_repo(self, sub_prefix: str) -> "S3ImageFileRepo":
         new_prefix = f"{self.prefix}/{sub_prefix}" if self.prefix else sub_prefix
-        return S3ImageFileRepo(self.bucket, new_prefix)
+        return S3ImageFileRepo(self.bucket, new_prefix, s3_client_param=self.s3)
 
     @log_exec_time
     def store_images(self, imgs: list, name: str) -> List[str]:
@@ -135,3 +142,71 @@ class S3ImageFileRepo:
             raise RuntimeError(f"cv2.imdecode failed to read image from S3: {bucket}/{key}")
         return img
 
+    def get_image_bytes(self, name: str) -> bytes:
+        """
+        Retrieve the raw bytes of an image from S3, for use in zipping or direct download.
+        Accepts either a plain filename (relative, no path traversal) or an s3://bucket/key URI.
+        """
+        # Accept s3://bucket/key or just filename
+        if name.startswith("s3://"):
+            uri = name[5:]
+            slash_idx = uri.find("/")
+            if slash_idx == -1 or slash_idx == len(uri) - 1:
+                raise ValueError(f"Invalid S3 URI: {name}")
+            bucket = uri[:slash_idx]
+            key = uri[slash_idx+1:]
+        else:
+            if Path(name).name != name:
+                raise ValueError("name must be a filename without path components")
+            bucket = self.bucket
+            key = self._full_key(name)
+        try:
+            resp = self.s3.get_object(Bucket=bucket, Key=key)
+        except self.s3.exceptions.NoSuchKey:
+            raise FileNotFoundError(f"Image not found in S3: {bucket}/{key}")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch image from S3: {bucket}/{key}") from exc
+        return resp["Body"].read()
+
+class S3PdfRetriever:
+    """
+    Retrieve PDF bytes from an S3 bucket/prefix or s3:// URI.
+    Can accept a pre-created boto3 S3 client for Lambda warm-up optimization.
+    Example usage at module level:
+        s3_client = boto3.client("s3")
+        retriever = S3PdfRetriever("my-bucket", s3_client=s3_client)
+    """
+    def __init__(self, bucket: str, prefix: str = ""):
+        self.bucket = bucket
+        if not self.bucket:
+            raise ValueError("S3 bucket name must be provided via argument or S3_BUCKET env var.")
+        self.prefix = prefix.strip("/")
+        self.s3 = s3_client
+
+    def _full_key(self, key: str) -> str:
+        if self.prefix:
+            return f"{self.prefix}/{key}".lstrip("/")
+        return key.lstrip("/")
+
+    def get_pdf_bytes(self, name: str) -> bytes:
+        # Accept s3://bucket/key or just filename
+        if name.startswith("s3://"):
+            uri = name[5:]  # remove 's3://'
+            slash_idx = uri.find("/")
+            if slash_idx == -1 or slash_idx == len(uri) - 1:
+                raise ValueError(f"Invalid S3 URI: {name}")
+            bucket = uri[:slash_idx]
+            key = uri[slash_idx+1:]
+        else:
+            # Only allow filename, no path traversal
+            if Path(name).name != name:
+                raise ValueError("name must be a filename without path components")
+            bucket = self.bucket
+            key = self._full_key(name)
+        try:
+            resp = self.s3.get_object(Bucket=bucket, Key=key)
+        except self.s3.exceptions.NoSuchKey:
+            raise FileNotFoundError(f"PDF not found in S3: {bucket}/{key}")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch PDF from S3: {bucket}/{key}") from exc
+        return resp["Body"].read()
