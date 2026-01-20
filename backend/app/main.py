@@ -13,6 +13,8 @@ from logic import process_pdf, apply_color_mapping, ImageFileRepository, PdfRetr
 from logic.color_vehicle import cluster_vehicle
 from logic.parsers import parse_page_list
 
+from aws.s3_logic import generate_presigned_url
+
 
 def stream_files_as_zip(image_repo, file_paths: list[str]):
     zip_io = io.BytesIO()
@@ -40,7 +42,7 @@ def get_image_file_repo() -> ImageFileRepository:
         print(f"[DEBUG] Using LocalImageFileRepo with path={path}")
         return LocalImageFileRepo(Path(path))
     elif deployment == "aws":
-        from aws.s3_file_repo import S3ImageFileRepo
+        from aws.s3_logic import S3ImageFileRepo
         bucket = os.getenv("s3_output_bucket", None)
         if bucket:
             print(f"[DEBUG] Using S3ImageFileRepo with bucket={bucket}")
@@ -56,8 +58,8 @@ def pdf_retriever() -> PdfRetriever:
         print(f"[DEBUG] UsingLocalPdfRetriever")
         return LocalPdfRetriever(".")
     elif deployment == "aws":
-        from aws.s3_file_repo import S3PdfRetriever
-        bucket = os.getenv("s3_output_bucket", None)
+        from aws.s3_logic import S3PdfRetriever
+        bucket = os.getenv("s3_input_bucket", None)
         if bucket:
             print(f"[DEBUG] Using S3ImageFileRepo with bucket={bucket}")
             return S3PdfRetriever(bucket)
@@ -175,6 +177,26 @@ async def api_apply_color_mapping(
     except Exception as exc:
         print(f"[ERROR] Exception in /apply_color_mapping: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+
+class GetSignedUrlRequest(BaseModel):
+    filename: str
+
+class GetSignedUrlResponse(BaseModel):
+    url: str
+    bucket: str
+    key: str
+
+@router.post("/get_signed_url", response_model=GetSignedUrlResponse)
+def get_signed_url(request: GetSignedUrlRequest = Body(...)):
+    bucket = os.getenv("s3_input_bucket")
+    if not bucket:
+        raise HTTPException(status_code=500, detail="s3_input_bucket env var not set")
+    key = request.filename
+    try:
+        url = generate_presigned_url(bucket, key)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return GetSignedUrlResponse(url=url, bucket=bucket, key=key)
 
 app = FastAPI()
 app.add_middleware(
