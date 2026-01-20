@@ -25,16 +25,29 @@ function App() {
   // Step 1b: Upload to S3 using signed URL
   const uploadToS3 = async (file) => {
     // Get signed URL from backend
-    const res = await axios.post(`${API_BASE_URL}/get_signed_url`, {
-      filename: file.name,
-      content_type: file.type,
-    });
-    const { signed_url, s3_uri } = res.data;
+    let res;
+    try {
+      res = await axios.post(`${API_BASE_URL}/get_signed_url`, {
+        filename: file.name,
+        content_type: file.type,
+      });
+    } catch (err) {
+      throw err;
+    }
+    // The backend should return { url, bucket, key }
+    const { url, bucket, key } = res.data;
+    if (!url || !bucket || !key) {
+      throw new Error("Invalid signed URL response from backend");
+    }
     // Upload file to S3
-    await axios.put(signed_url, file, {
-      headers: { "Content-Type": file.type },
+    await axios.put(url, file, {
+      headers: {
+        'Content-Type': file.type
+      }
     });
-    return s3_uri;
+    // Return the S3 URI for later use
+    const s3Uri = `s3://${bucket}/${key}`;
+    return s3Uri;
   };
 
   // Step 2: Call process_pdf
