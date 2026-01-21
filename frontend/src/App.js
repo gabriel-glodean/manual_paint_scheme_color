@@ -7,7 +7,7 @@ function App() {
   const [pdf, setPdf] = useState(null);
   const [pdfUrl, setPdfUrl] = useState("");
   const [K, setK] = useState(10);
-  const [dpi, setDpi] = useState(200);
+  const [dpi, setDpi] = useState(125);
   const [pages, setPages] = useState("");
   const [threshold, setThreshold] = useState(3);
   const [centroids, setCentroids] = useState(null);
@@ -80,11 +80,15 @@ function App() {
     // Step 4: Download preview image
     // Assume image path is returned in res.data.images[0]
     const imgRes = await axios.post(
-      `${API_BASE_URL}/download_images`,
-      { images: [res.data.images[0]],
-        session: sessionId,},
-      { responseType: "blob" }
+        `${API_BASE_URL}/download_images`,
+        { images: [res.data.images[0]], session: sessionId },
+        {
+            responseType: "blob" ,
+            headers: { Accept: "application/x-zip-compressed" }
+        }
     );
+    console.log(imgRes.data.size, imgRes.data.type);
+
     // Unzip and extract preview image
     const zip = await JSZip.loadAsync(imgRes.data);
     const files = Object.keys(zip.files);
@@ -107,7 +111,8 @@ function App() {
       { images: res.data.images,
        session: session,
        folder:"colorized",},
-      { responseType: "blob" }
+      { responseType: "blob",
+        headers: { Accept: "application/x-zip-compressed" }}
     );
     // Unzip and extract images in parallel
     const zip = await JSZip.loadAsync(zipRes.data);
@@ -150,7 +155,7 @@ function App() {
         <input type="range" min={-1} max={40} value={threshold} onChange={e => setThreshold(Number(e.target.value))} />
         <span>{threshold}</span>
       </div>
-      <button onClick={handleProcessPdf}>Process PDF</button>
+      <button onClick={handleProcessPdf} disabled={!pages}>Process PDF</button>
       <div>
         <label>Centroid Grayscale Values:</label>
         <pre>{centroids && JSON.stringify(centroids, null, 2)}</pre>
@@ -160,10 +165,11 @@ function App() {
         {previewImg && <img src={previewImg} alt="Preview" style={{ width: 300, margin: 5 }} />}
       </div>
       <div>
-        <label>Enter hex colors for gray ranges (comma-separated):</label>
-        <input type="text" value={colorInput} onChange={e => setColorInput(e.target.value)} />
+        <label>Enter hex colors for gray ranges (comma-separated eg. #C7D7E0(100-123),#3F4A54(124-150),#6F6F78(151-200)):</label>
+        <br />
+        <input type="text" value={colorInput} onChange={e => setColorInput(e.target.value)} style={{ width: 600 }} />
       </div>
-      <button onClick={handleApply}>Apply Color Mapping</button>
+      <button onClick={handleApply} disabled={!session}>Apply Color Mapping</button>
       <div>
         <label>Final Colored Vehicle Gallery:</label>
         <div style={{ display: "flex", flexWrap: "wrap" }}>

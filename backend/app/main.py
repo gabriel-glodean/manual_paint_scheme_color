@@ -27,10 +27,15 @@ def stream_files_as_zip(image_repo, file_paths: list[str]):
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"Failed to fetch or add {file_path}: {exc}")
     zip_io.seek(0)
+    zip_bytes = zip_io.getvalue()
+    print(f"[DEBUG] Returning ZIP of size: {len(zip_bytes)} bytes")
     return StreamingResponse(
-        zip_io,
-        media_type="application/x-zip-compressed",
-        headers={"Content-Disposition": "attachment; filename=files.zip"}
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=files.zip",
+            "Content-Transfer-Encoding": "binary"
+        }
     )
 
 def get_image_file_repo() -> ImageFileRepository:
@@ -198,10 +203,13 @@ def get_signed_url(request: GetSignedUrlRequest = Body(...)):
         raise HTTPException(status_code=500, detail=str(exc))
     return GetSignedUrlResponse(url=url, bucket=bucket, key=key)
 
+# Read allowed origins from environment variable, default to localhost:3000
+allowed_origins = os.getenv("cors_allowed_origins", "http://localhost:3000").split(",")
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict this to your frontend URL in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
